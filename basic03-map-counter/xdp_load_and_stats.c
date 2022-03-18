@@ -97,7 +97,7 @@ struct record {
 };
 
 struct stats_record {
-	struct record stats[1]; /* Assignment#2: Hint */
+	struct record stats[2]; /* Assignment#2: Hint, [0] for pkt cnt, [1] for byte cnt */
 };
 
 static double calc_period(struct record *r, struct record *p)
@@ -115,7 +115,7 @@ static double calc_period(struct record *r, struct record *p)
 static void stats_print(struct stats_record *stats_rec,
 			struct stats_record *stats_prev)
 {
-	struct record *rec, *prev;
+	struct record *rec, *prev, *byte_rec;
 	double period;
 	__u64 packets;
 	double pps; /* packets per sec */
@@ -125,9 +125,14 @@ static void stats_print(struct stats_record *stats_rec,
 		char *fmt = "%-12s %'11lld pkts (%'10.0f pps)"
 			//" %'11lld Kbytes (%'6.0f Mbits/s)"
 			" period:%f\n";
+		char *fmt_byts = "%-12s %'11lld bytes (%'10.0f pps)"
+			//" %'11lld Kbytes (%'6.0f Mbits/s)"
+			" period:%f\n\n";
 		const char *action = action2str(XDP_PASS);
 		rec  = &stats_rec->stats[0];
 		prev = &stats_prev->stats[0];
+
+		byte_rec  = &stats_rec->stats[1];
 
 		period = calc_period(rec, prev);
 		if (period == 0)
@@ -137,15 +142,17 @@ static void stats_print(struct stats_record *stats_rec,
 		pps     = packets / period;
 
 		printf(fmt, action, rec->total.rx_packets, pps, period);
+		printf(fmt_byts, "Pass Bytes", byte_rec->total.rx_packets, 0, period);
 	}
 }
 
 /* BPF_MAP_TYPE_ARRAY */
 void map_get_value_array(int fd, __u32 key, struct datarec *value)
 {
-	if ((bpf_map_lookup_elem(fd, &key, value)) != 0) {
+	int res = bpf_map_lookup_elem(fd, &key, value);
+	if (res != 0) {
 		fprintf(stderr,
-			"ERR: bpf_map_lookup_elem failed key:0x%X\n", key);
+			"ERR: bpf_map_lookup_elem failed key:0x%X, %d\n", key, res);
 	}
 }
 
@@ -180,7 +187,10 @@ static bool map_collect(int fd, __u32 map_type, __u32 key, struct record *rec)
 	}
 
 	/* Assignment#1: Add byte counters */
+
 	rec->total.rx_packets = value.rx_packets;
+	
+	
 	return true;
 }
 
@@ -188,9 +198,18 @@ static void stats_collect(int map_fd, __u32 map_type,
 			  struct stats_record *stats_rec)
 {
 	/* Assignment#2: Collect other XDP actions stats  */
-	__u32 key = XDP_PASS;
+	__u32 passkey = XDP_PASS;
 
-	map_collect(map_fd, map_type, key, &stats_rec->stats[0]);
+	map_collect(map_fd, map_type, passkey, &stats_rec->stats[0]);
+}
+
+static void byte_collect(int map_fd, __u32 map_type,
+			  struct stats_record *stats_rec)
+{
+	/* Assignment#2: Collect other XDP actions stats  */
+	__u32 key = 10;
+
+	map_collect(map_fd, map_type, key, &stats_rec->stats[1]);
 }
 
 static void stats_poll(int map_fd, __u32 map_type, int interval)
@@ -208,11 +227,13 @@ static void stats_poll(int map_fd, __u32 map_type, int interval)
 
 	/* Get initial reading quickly */
 	stats_collect(map_fd, map_type, &record);
+	byte_collect(map_fd, map_type, &record);
 	usleep(1000000/4);
 
 	while (1) {
 		prev = record; /* struct copy */
 		stats_collect(map_fd, map_type, &record);
+		byte_collect(map_fd, map_type, &record);
 		stats_print(&record, &prev);
 		sleep(interval);
 	}

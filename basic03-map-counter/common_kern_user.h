@@ -11,7 +11,7 @@ struct datarec {
 };
 
 #ifndef XDP_ACTION_MAX
-#define XDP_ACTION_MAX (XDP_REDIRECT + 1)
+#define XDP_ACTION_MAX (XDP_REDIRECT + 10)
 #endif
 
 #endif /* __COMMON_KERN_USER_H */
