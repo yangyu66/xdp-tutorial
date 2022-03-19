@@ -4,6 +4,8 @@
 #include <linux/in.h>
 #include <linux/if_ether.h>
 #include <linux/if_packet.h>
+#include <linux/ip.h>
+
 #include <linux/ipv6.h>
 #include <linux/icmpv6.h>
 #include <bpf/bpf_helpers.h>
@@ -27,22 +29,29 @@ struct hdr_cursor {
  * All return values are in host byte order.
  */
 static __always_inline int parse_ethhdr(struct hdr_cursor *nh,
-					void *data_end,
-					struct ethhdr **ethhdr)
+					void *data_end)
 {
+	// int r = 8;
+	// return r;
 	struct ethhdr *eth = nh->pos;
-	int hdrsize = sizeof(*eth);
+	
+	int ethsize = sizeof(*eth);
 
 	/* Byte-count bounds check; check if current pointer + size of header
 	 * is after data_end.
 	 */
-	if (nh->pos + 1 > data_end)
+	struct iphdr *ip = nh->pos + ethsize;
+
+	ethsize += sizeof(struct iphdr);
+
+
+	if (nh->pos + ethsize > data_end)
 		return -1;
 
-	nh->pos += hdrsize;
-	*ethhdr = eth;
+	// nh->pos += hdrsize;
+	// *ethhdr = eth;
 
-	return eth->h_proto; /* network-byte-order */
+	return ip->protocol; /* network-byte-order */
 }
 
 /* Assignment 2: Implement and use this */
@@ -64,7 +73,7 @@ int  xdp_parser_func(struct xdp_md *ctx)
 {
 	void *data_end = (void *)(long)ctx->data_end;
 	void *data = (void *)(long)ctx->data;
-	struct ethhdr *eth;
+	// struct ethhdr *eth;
 
 	/* Default action XDP_PASS, imply everything we couldn't parse, or that
 	 * we don't want to deal with, we just pass up the stack and let the
@@ -83,14 +92,13 @@ int  xdp_parser_func(struct xdp_md *ctx)
 	 * parsing fails. Each helper function does sanity checking (is the
 	 * header type in the packet correct?), and bounds checking.
 	 */
-	nh_type = parse_ethhdr(&nh, data_end, &eth);
-	if (nh_type != bpf_htons(ETH_P_IPV6))
-		goto out;
+	nh_type = parse_ethhdr(&nh, data_end);
+	if (nh_type == IPPROTO_ICMP)
+		action = XDP_DROP;;
 
 	/* Assignment additions go below here */
 
-	action = XDP_DROP;
-out:
+	
 	return xdp_stats_record_action(ctx, action); /* read via xdp_stats */
 }
 
