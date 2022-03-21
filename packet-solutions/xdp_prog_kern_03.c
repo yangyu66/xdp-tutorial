@@ -149,6 +149,87 @@ out:
 	return xdp_stats_record_action(ctx, action);
 }
 
+
+/*
+sudo ./xdp_loader -d lo -A -F --progsec xdp_icmp_lb --filename xdp_prog_kern_03.o
+sudo ./xdp_stats -d lo
+sudo ./xdp_loader -d lo -U --progsec xdp_icmp_lb --filename xdp_prog_kern_03.o
+
+sudo ip link set lo xdp off
+*/
+SEC("xdp_icmp_lb")
+int xdp_icmp_lb_func(struct xdp_md *ctx)
+{
+	void *data_end = (void *)(long)ctx->data_end;
+	void *data = (void *)(long)ctx->data;
+	struct hdr_cursor nh;
+	struct ethhdr *eth;
+	int eth_type;
+	int ip_type;
+	int icmp_type;
+	struct iphdr *iphdr;
+	struct ipv6hdr *ipv6hdr;
+	__u16 echo_reply, old_csum;
+	struct icmphdr_common *icmphdr;
+	struct icmphdr_common icmphdr_old;
+	__u32 action = XDP_PASS;
+
+	/* These keep track of the next header type and iterator pointer */
+	nh.pos = data;
+
+	/* Parse Ethernet and IP/IPv6 headers */
+	eth_type = parse_ethhdr(&nh, data_end, &eth);
+	if (eth_type == bpf_htons(ETH_P_IP)) {
+		ip_type = parse_iphdr(&nh, data_end, &iphdr);
+		if (ip_type != IPPROTO_ICMP)
+			goto out;
+	} else if (eth_type == bpf_htons(ETH_P_IPV6)) {
+		ip_type = parse_ip6hdr(&nh, data_end, &ipv6hdr);
+		if (ip_type != IPPROTO_ICMPV6)
+			goto out;
+	} else {
+		goto out;
+	}
+
+	/*
+	 * We are using a special parser here which returns a stucture
+	 * containing the "protocol-independent" part of an ICMP or ICMPv6
+	 * header.  For purposes of this Assignment we are not interested in
+	 * the rest of the structure.
+	 */
+	icmp_type = parse_icmphdr_common(&nh, data_end, &icmphdr);
+	if (eth_type == bpf_htons(ETH_P_IP) && icmp_type == ICMP_ECHO) {
+		/* Swap IP source and destination */
+		swap_src_dst_ipv4(iphdr);
+		echo_reply = ICMP_ECHOREPLY;
+	} else if (eth_type == bpf_htons(ETH_P_IPV6)
+		   && icmp_type == ICMPV6_ECHO_REQUEST) {
+		/* Swap IPv6 source and destination */
+		swap_src_dst_ipv6(ipv6hdr);
+		echo_reply = ICMPV6_ECHO_REPLY;
+	} else {
+		goto out;
+	}
+
+	/* Swap Ethernet source and destination */
+	swap_src_dst_mac(eth);
+
+
+	/* Patch the packet and update the checksum.*/
+	old_csum = icmphdr->cksum;
+	icmphdr->cksum = 0;
+	icmphdr_old = *icmphdr;
+	icmphdr->type = echo_reply;
+	icmphdr->cksum = icmp_checksum_diff(~old_csum, icmphdr, &icmphdr_old);
+
+	action = XDP_TX;
+
+out:
+	return xdp_stats_record_action(ctx, action);
+}
+
+
+
 /* Solution to packet03/assignment-2 */
 SEC("xdp_redirect")
 int xdp_redirect_func(struct xdp_md *ctx)
